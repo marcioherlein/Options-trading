@@ -1,0 +1,10 @@
+pyhomebroker
+py_vollib
+fastapi
+uvicorn[standard]
+sse-starlette
+pandas
+numpy
+python-dotenv
+yfinance
+sqlalchemy
