@@ -73,7 +73,7 @@ def connect():
         if _hb is not None:
             return
         hb = HomeBroker(BROKER_ID)
-        hb.auth.login(user=user, password=password, raise_exception=True)
+        hb.auth.login(user, password, raise_exception=True)
         hb.online.connect()
 
         hb.online.subscribe_quotes(
