@@ -111,7 +111,7 @@ export default function VolatilityChart({ volSummary, volSurface }: Props) {
               <Tooltip
                 contentStyle={{ backgroundColor: "#18181b", border: "1px solid #3f3f46", borderRadius: 8 }}
                 labelStyle={{ color: "#a1a1aa" }}
-                formatter={(val: number) => [`${val?.toFixed(1)}%`]}
+                formatter={(val) => [`${(val as number)?.toFixed(1)}%`]}
               />
               <Legend wrapperStyle={{ fontSize: 11, color: "#a1a1aa" }} />
               <Line type="monotone" dataKey="call_iv" stroke="#4ade80" dot={false} name="Call IV %" strokeWidth={2} />
