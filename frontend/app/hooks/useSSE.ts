@@ -21,11 +21,11 @@ export function useSSE() {
 
     es.onmessage = (event) => {
       try {
-        const payload: StreamPayload = JSON.parse(event.data);
-        if (payload.error) {
-          setError(payload.error as unknown as string);
+        const raw = JSON.parse(event.data) as Record<string, unknown>;
+        if (raw.error) {
+          setError(raw.error as string);
         } else {
-          setData(payload);
+          setData(raw as unknown as StreamPayload);
         }
       } catch {
         setError("Failed to parse stream data");
