@@ -127,7 +127,7 @@ export default function StrategiesPanel({ strategies, stockPrice }: Props) {
                   <Tooltip
                     contentStyle={{ backgroundColor: "#18181b", border: "1px solid #3f3f46", borderRadius: 8 }}
                     labelStyle={{ color: "#a1a1aa", fontSize: 10 }}
-                    formatter={(val: number) => [val.toFixed(4), "P&L"]}
+                    formatter={(val) => [(val as number).toFixed(4), "P&L"]}
                     labelFormatter={(v) => `Price: ${Number(v).toFixed(2)}`}
                   />
                   <ReferenceLine y={0} stroke="#52525b" strokeDasharray="4 2" />
