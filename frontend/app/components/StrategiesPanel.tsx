@@ -87,7 +87,7 @@ export default function StrategiesPanel({ strategies, stockPrice }: Props) {
                 className={`w-full text-left rounded-lg p-3 border transition-all ${c.bg} ${c.border} ${
                   selected === i ? "ring-1 ring-offset-0" : "opacity-80 hover:opacity-100"
                 }`}
-                style={selected === i ? { ringColor: c.color } : {}}
+                style={selected === i ? { outline: `1px solid ${c.color}` } : {}}
               >
                 <div className="flex items-center justify-between">
                   <span className="text-white font-semibold text-sm">{s.name}</span>
