@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { StreamPayload } from "@/app/lib/types";
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+const BACKEND_URL = (process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000").replace(/\/$/, "");
 
 export function useSSE() {
   const [data, setData] = useState<StreamPayload | null>(null);

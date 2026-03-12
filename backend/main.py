@@ -117,6 +117,8 @@ async def stream(request: Request):
         headers={
             "X-Accel-Buffering": "no",
             "Cache-Control": "no-cache",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
         },
     )
 
