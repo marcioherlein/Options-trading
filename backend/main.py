@@ -98,10 +98,8 @@ def build_payload() -> dict:
     }
 
 
-async def event_generator(request):
+async def event_generator():
     while True:
-        if await request.is_disconnected():
-            break
         try:
             payload = build_payload()
             yield {"data": json.dumps(payload)}
@@ -113,7 +111,7 @@ async def event_generator(request):
 
 @app.get("/stream")
 async def stream(request: Request):
-    return EventSourceResponse(event_generator(request))
+    return EventSourceResponse(event_generator(), ping=20)
 
 
 @app.get("/health")
