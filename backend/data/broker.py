@@ -1,19 +1,25 @@
 """
-GGAL market data via yfinance.
-Polls stock price and options chain every POLL_INTERVAL seconds.
-GGAL trades on NASDAQ — yfinance provides full options chain with Greeks.
+GGAL market data:
+- Stock price: yfinance (GGAL.BA, pesos)
+- Options chain: BYMA open data API (free, no auth, ~20min delay)
 """
 import threading
 import logging
 import time
 from typing import Optional
 
+import requests
 import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
-TICKER = "GGAL.BA"
-POLL_INTERVAL = 30  # yfinance rate limits — poll every 30s
+TICKER_YF = "GGAL.BA"
+TICKER_BYMA = "GGAL"
+POLL_INTERVAL = 30
+
+BYMA_OPTIONS_URL = (
+    "https://open.bymadata.com.ar/vanoms-be-core/rest/api/bymadata/free/bnown/seriesOpciones"
+)
 
 _lock = threading.Lock()
 _stop_event = threading.Event()
@@ -24,45 +30,61 @@ _options_chain: list[dict] = []
 
 
 def _fetch_stock() -> dict:
-    t = yf.Ticker(TICKER)
+    t = yf.Ticker(TICKER_YF)
     fi = t.fast_info
     return {
         "last": float(getattr(fi, "last_price", 0) or 0),
-        "bid": float(getattr(fi, "bid", 0) or 0),
-        "ask": float(getattr(fi, "ask", 0) or 0),
+        "bid": 0.0,
+        "ask": 0.0,
         "volume": int(getattr(fi, "last_volume", 0) or 0),
         "close": float(getattr(fi, "previous_close", 0) or 0),
     }
 
 
-def _fetch_options() -> list[dict]:
-    t = yf.Ticker(TICKER)
-    records = []
+def _parse_byma_option(item: dict) -> Optional[dict]:
     try:
-        expirations = t.options
-    except Exception:
+        symbol = item.get("simbolo") or item.get("symbol") or ""
+        # BYMA option type: look for 'C' (call) or 'V'/'P' (put) in descripcion or tipoOpcion
+        desc = str(item.get("descripcionEspecie") or item.get("descripcion") or symbol).upper()
+        tipo = str(item.get("tipoOpcion") or "").upper()
+        if tipo == "C" or " C " in desc or desc.endswith("C"):
+            opt_type = "call"
+        else:
+            opt_type = "put"
+
+        return {
+            "symbol": symbol,
+            "strike": float(item.get("ejercicio") or item.get("precioEjercicio") or item.get("strike") or 0),
+            "expiry": str(item.get("fechaVencimiento") or item.get("vencimiento") or ""),
+            "type": opt_type,
+            "bid": float(item.get("precioCompra") or item.get("bid") or 0),
+            "ask": float(item.get("precioVenta") or item.get("ask") or 0),
+            "last": float(item.get("ultimoPrecio") or item.get("ultimo") or item.get("last") or 0),
+            "volume": int(item.get("cantidadNominal") or item.get("volumen") or item.get("volume") or 0),
+            "open_interest": int(item.get("openInterest") or 0),
+        }
+    except Exception as e:
+        logger.debug(f"Could not parse option item: {e}")
+        return None
+
+
+def _fetch_options() -> list[dict]:
+    try:
+        resp = requests.post(
+            BYMA_OPTIONS_URL,
+            json={"subyacente": TICKER_BYMA},
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        raw = resp.json()
+        items = raw if isinstance(raw, list) else raw.get("data", raw.get("opciones", raw.get("titulos", [])))
+        records = [r for item in items if (r := _parse_byma_option(item)) is not None]
+        logger.info(f"BYMA returned {len(items)} items, parsed {len(records)} options")
         return records
-
-    for expiry in expirations[:4]:  # limit to next 4 expiries
-        try:
-            chain = t.option_chain(expiry)
-            for df, opt_type in [(chain.calls, "call"), (chain.puts, "put")]:
-                for _, row in df.iterrows():
-                    records.append({
-                        "symbol": str(row.get("contractSymbol", "")),
-                        "strike": float(row.get("strike", 0)),
-                        "expiry": expiry,
-                        "type": opt_type,
-                        "bid": float(row.get("bid", 0) or 0),
-                        "ask": float(row.get("ask", 0) or 0),
-                        "last": float(row.get("lastPrice", 0) or 0),
-                        "volume": int(row.get("volume", 0) or 0),
-                        "open_interest": int(row.get("openInterest", 0) or 0),
-                    })
-        except Exception as e:
-            logger.debug(f"Skipping expiry {expiry}: {e}")
-
-    return records
+    except Exception as e:
+        logger.error(f"BYMA options fetch error: {e}")
+        return []
 
 
 def _poll_loop() -> None:
@@ -72,7 +94,7 @@ def _poll_loop() -> None:
             stock = _fetch_stock()
             with _lock:
                 _stock_data = stock
-            logger.info(f"Stock updated: GGAL @ {stock['last']}")
+            logger.info(f"Stock updated: GGAL.BA @ {stock['last']}")
         except Exception as e:
             logger.error(f"Stock fetch error: {e}")
 
@@ -92,7 +114,7 @@ def connect() -> None:
     _stop_event.clear()
     _poll_thread = threading.Thread(target=_poll_loop, daemon=True)
     _poll_thread.start()
-    logger.info("yfinance polling started.")
+    logger.info("BYMA+yfinance polling started.")
 
 
 def get_stock_price() -> dict:
@@ -109,4 +131,4 @@ def disconnect() -> None:
     _stop_event.set()
     if _poll_thread:
         _poll_thread.join(timeout=5)
-    logger.info("yfinance polling stopped.")
+    logger.info("Polling stopped.")
