@@ -75,6 +75,7 @@ def _fetch_options() -> list[dict]:
             json={"subyacente": TICKER_BYMA},
             headers={"Content-Type": "application/json", "Accept": "application/json"},
             timeout=15,
+            verify=False,
         )
         resp.raise_for_status()
         raw = resp.json()
