@@ -65,6 +65,39 @@ def _fetch_stock() -> dict:
     }
 
 
+def _fetch_options_bolsar() -> list[dict]:
+    """Try Bolsar.info public JSON endpoint — no auth required."""
+    try:
+        url  = "https://bolsar.info/opcionesJson.php"
+        resp = requests.get(url, params={"Underlying": TICKER_IOL}, timeout=15, verify=False)
+        logger.info(f"Bolsar {resp.status_code} | {resp.text[:300]}")
+        if resp.status_code != 200:
+            return []
+        raw   = resp.json()
+        items = raw if isinstance(raw, list) else raw.get("data", raw.get("opciones", []))
+        records = []
+        for item in items:
+            try:
+                tipo = str(item.get("tipo") or item.get("tipoOpcion") or "").upper()
+                records.append({
+                    "symbol":        str(item.get("simbolo") or item.get("symbol") or ""),
+                    "strike":        float(item.get("ejercicio") or item.get("strike") or item.get("precioEjercicio") or 0),
+                    "expiry":        str(item.get("vencimiento") or item.get("fechaVencimiento") or ""),
+                    "type":          "call" if tipo in ("C", "CALL", "COMPRA") else "put",
+                    "bid":           float(item.get("compra") or item.get("bid") or 0),
+                    "ask":           float(item.get("venta") or item.get("ask") or 0),
+                    "last":          float(item.get("ultimo") or item.get("last") or 0),
+                    "volume":        int(item.get("volumen") or item.get("volume") or 0),
+                    "open_interest": int(item.get("intAbierto") or item.get("openInterest") or 0),
+                })
+            except Exception as e:
+                logger.debug(f"Bolsar item skip: {e}")
+        return records
+    except Exception as e:
+        logger.error(f"Bolsar fetch error: {e}")
+        return []
+
+
 def _fetch_options_iol(sess: requests.Session) -> list[dict]:
     # Try the two most likely IOL endpoint patterns
     urls = [
@@ -126,15 +159,16 @@ def _poll_loop(user: str, password: str) -> None:
         except Exception as e:
             logger.error(f"Stock fetch error: {e}")
 
-        # Options via IOL
-        if _session:
-            try:
+        # Options: try Bolsar first, then IOL
+        try:
+            chain = _fetch_options_bolsar()
+            if not chain and _session:
                 chain = _fetch_options_iol(_session)
-                with _lock:
-                    _options_chain = chain
-                logger.info(f"Options: {len(chain)} contracts")
-            except Exception as e:
-                logger.error(f"Options fetch error: {e}")
+            with _lock:
+                _options_chain = chain
+            logger.info(f"Options: {len(chain)} contracts")
+        except Exception as e:
+            logger.error(f"Options fetch error: {e}")
 
         _stop_event.wait(POLL_INTERVAL)
 
