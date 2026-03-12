@@ -69,23 +69,30 @@ def _parse_byma_option(item: dict) -> Optional[dict]:
 
 
 def _fetch_options() -> list[dict]:
-    try:
-        resp = requests.post(
-            BYMA_OPTIONS_URL,
-            json={"subyacente": TICKER_BYMA},
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            timeout=15,
-            verify=False,
-        )
-        resp.raise_for_status()
-        raw = resp.json()
-        items = raw if isinstance(raw, list) else raw.get("data", raw.get("opciones", raw.get("titulos", [])))
-        records = [r for item in items if (r := _parse_byma_option(item)) is not None]
-        logger.info(f"BYMA returned {len(items)} items, parsed {len(records)} options")
-        return records
-    except Exception as e:
-        logger.error(f"BYMA options fetch error: {e}")
-        return []
+    # Try multiple known BYMA open API endpoint variants
+    attempts = [
+        ("GET",  "https://open.bymadata.com.ar/vanoms-be-core/rest/api/bymadata/free/opciones", None),
+        ("GET",  "https://open.bymadata.com.ar/vanoms-be-core/rest/api/bymadata/free/bnown/seriesOpciones", None),
+        ("POST", "https://open.bymadata.com.ar/vanoms-be-core/rest/api/bymadata/free/bnown/seriesOpciones", {"opcion": TICKER_BYMA}),
+        ("POST", "https://open.bymadata.com.ar/vanoms-be-core/rest/api/bymadata/free/bnown/seriesOpciones", {}),
+    ]
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    for method, url, body in attempts:
+        try:
+            if method == "GET":
+                resp = requests.get(url, headers=headers, timeout=15, verify=False)
+            else:
+                resp = requests.post(url, json=body, headers=headers, timeout=15, verify=False)
+            logger.info(f"BYMA {method} {url} → {resp.status_code} | body[:200]: {resp.text[:200]}")
+            if resp.status_code == 200:
+                raw = resp.json()
+                items = raw if isinstance(raw, list) else raw.get("data", raw.get("opciones", raw.get("titulos", [])))
+                records = [r for item in items if (r := _parse_byma_option(item)) is not None]
+                logger.info(f"BYMA parsed {len(records)} options from {len(items)} items")
+                return records
+        except Exception as e:
+            logger.error(f"BYMA attempt {method} {url} failed: {e}")
+    return []
 
 
 def _poll_loop() -> None:
