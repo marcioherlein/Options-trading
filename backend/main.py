@@ -111,7 +111,14 @@ async def event_generator():
 
 @app.get("/stream")
 async def stream(request: Request):
-    return EventSourceResponse(event_generator(), ping=20)
+    return EventSourceResponse(
+        event_generator(),
+        ping=20,
+        headers={
+            "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache",
+        },
+    )
 
 
 @app.get("/health")
