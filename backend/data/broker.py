@@ -1,128 +1,156 @@
 """
 GGAL market data:
-- Stock price: yfinance (GGAL.BA, pesos)
-- Options chain: BYMA open data API (free, no auth, ~20min delay)
+- Stock price: yfinance (GGAL.BA, pesos) — always works
+- Options chain: IOL REST API with session-based auth
 """
+import os
 import threading
 import logging
 import time
 from typing import Optional
 
 import requests
+import urllib3
 import yfinance as yf
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
-TICKER_YF = "GGAL.BA"
-TICKER_BYMA = "GGAL"
+TICKER_YF   = "GGAL.BA"
+TICKER_IOL  = "GGAL"
+MARKET      = "bCBA"
+IOL_BASE    = "https://api.invertironline.com"
 POLL_INTERVAL = 30
 
-BYMA_OPTIONS_URL = (
-    "https://open.bymadata.com.ar/vanoms-be-core/rest/api/bymadata/free/bnown/seriesOpciones"
-)
-
-_lock = threading.Lock()
-_stop_event = threading.Event()
+_lock        = threading.Lock()
+_stop_event  = threading.Event()
 _poll_thread: Optional[threading.Thread] = None
 
-_stock_data: dict = {}
+_stock_data:    dict      = {}
 _options_chain: list[dict] = []
 
+_session: Optional[requests.Session] = None
+
+
+# ── Auth ────────────────────────────────────────────────────────────────────
+
+def _iol_login(user: str, password: str) -> requests.Session:
+    sess = requests.Session()
+    resp = sess.post(
+        f"{IOL_BASE}/token",
+        data={"username": user, "password": password, "grant_type": "password"},
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        verify=False,
+        timeout=15,
+    )
+    logger.info(f"IOL login status: {resp.status_code} | body: {resp.text[:300]}")
+    resp.raise_for_status()
+    token = resp.json().get("access_token")
+    sess.headers.update({"Authorization": f"Bearer {token}"})
+    return sess
+
+
+# ── Data fetchers ────────────────────────────────────────────────────────────
 
 def _fetch_stock() -> dict:
-    t = yf.Ticker(TICKER_YF)
+    t  = yf.Ticker(TICKER_YF)
     fi = t.fast_info
     return {
-        "last": float(getattr(fi, "last_price", 0) or 0),
-        "bid": 0.0,
-        "ask": 0.0,
-        "volume": int(getattr(fi, "last_volume", 0) or 0),
-        "close": float(getattr(fi, "previous_close", 0) or 0),
+        "last":   float(getattr(fi, "last_price",     0) or 0),
+        "bid":    0.0,
+        "ask":    0.0,
+        "volume": int(getattr(fi,   "last_volume",    0) or 0),
+        "close":  float(getattr(fi, "previous_close", 0) or 0),
     }
 
 
-def _parse_byma_option(item: dict) -> Optional[dict]:
-    try:
-        symbol = item.get("simbolo") or item.get("symbol") or ""
-        # BYMA option type: look for 'C' (call) or 'V'/'P' (put) in descripcion or tipoOpcion
-        desc = str(item.get("descripcionEspecie") or item.get("descripcion") or symbol).upper()
-        tipo = str(item.get("tipoOpcion") or "").upper()
-        if tipo == "C" or " C " in desc or desc.endswith("C"):
-            opt_type = "call"
-        else:
-            opt_type = "put"
-
-        return {
-            "symbol": symbol,
-            "strike": float(item.get("ejercicio") or item.get("precioEjercicio") or item.get("strike") or 0),
-            "expiry": str(item.get("fechaVencimiento") or item.get("vencimiento") or ""),
-            "type": opt_type,
-            "bid": float(item.get("precioCompra") or item.get("bid") or 0),
-            "ask": float(item.get("precioVenta") or item.get("ask") or 0),
-            "last": float(item.get("ultimoPrecio") or item.get("ultimo") or item.get("last") or 0),
-            "volume": int(item.get("cantidadNominal") or item.get("volumen") or item.get("volume") or 0),
-            "open_interest": int(item.get("openInterest") or 0),
-        }
-    except Exception as e:
-        logger.debug(f"Could not parse option item: {e}")
-        return None
-
-
-def _fetch_options() -> list[dict]:
-    # Try multiple known BYMA open API endpoint variants
-    attempts = [
-        ("GET",  "https://open.bymadata.com.ar/vanoms-be-core/rest/api/bymadata/free/opciones", None),
-        ("GET",  "https://open.bymadata.com.ar/vanoms-be-core/rest/api/bymadata/free/bnown/seriesOpciones", None),
-        ("POST", "https://open.bymadata.com.ar/vanoms-be-core/rest/api/bymadata/free/bnown/seriesOpciones", {"opcion": TICKER_BYMA}),
-        ("POST", "https://open.bymadata.com.ar/vanoms-be-core/rest/api/bymadata/free/bnown/seriesOpciones", {}),
+def _fetch_options_iol(sess: requests.Session) -> list[dict]:
+    # Try the two most likely IOL endpoint patterns
+    urls = [
+        f"{IOL_BASE}/api/v2/{MARKET}/Titulos/{TICKER_IOL}/Opciones",
+        f"{IOL_BASE}/api/v2/cotizaciones/opciones/{MARKET}/{TICKER_IOL}",
     ]
-    headers = {"Content-Type": "application/json", "Accept": "application/json"}
-    for method, url, body in attempts:
+    for url in urls:
         try:
-            if method == "GET":
-                resp = requests.get(url, headers=headers, timeout=15, verify=False)
-            else:
-                resp = requests.post(url, json=body, headers=headers, timeout=15, verify=False)
-            logger.info(f"BYMA {method} {url} → {resp.status_code} | body[:200]: {resp.text[:200]}")
-            if resp.status_code == 200:
-                raw = resp.json()
-                items = raw if isinstance(raw, list) else raw.get("data", raw.get("opciones", raw.get("titulos", [])))
-                records = [r for item in items if (r := _parse_byma_option(item)) is not None]
-                logger.info(f"BYMA parsed {len(records)} options from {len(items)} items")
+            resp = sess.get(url, verify=False, timeout=15)
+            logger.info(f"IOL options {url} → {resp.status_code} | {resp.text[:300]}")
+            if resp.status_code != 200:
+                continue
+            raw   = resp.json()
+            items = raw if isinstance(raw, list) else raw.get("opciones", raw.get("titulos", raw.get("data", [])))
+            records = []
+            for item in items:
+                try:
+                    tipo   = str(item.get("tipoOpcion") or item.get("tipo") or "").upper()
+                    puntas = item.get("puntas") or []
+                    records.append({
+                        "symbol":        str(item.get("simbolo") or ""),
+                        "strike":        float(item.get("ejercicio") or item.get("strike") or 0),
+                        "expiry":        str(item.get("fechaVencimiento") or ""),
+                        "type":          "call" if tipo in ("C", "CALL") else "put",
+                        "bid":           float(puntas[0].get("precioCompra", 0) if puntas else 0),
+                        "ask":           float(puntas[0].get("precioVenta",  0) if puntas else 0),
+                        "last":          float(item.get("ultimoPrecio") or 0),
+                        "volume":        int(item.get("cantidadNominal") or item.get("volumen") or 0),
+                        "open_interest": int(item.get("openInterest") or 0),
+                    })
+                except Exception as e:
+                    logger.debug(f"Skipping option item: {e}")
+            if records:
                 return records
         except Exception as e:
-            logger.error(f"BYMA attempt {method} {url} failed: {e}")
+            logger.error(f"IOL options fetch error {url}: {e}")
     return []
 
 
-def _poll_loop() -> None:
-    global _stock_data, _options_chain
+# ── Poll loop ────────────────────────────────────────────────────────────────
+
+def _poll_loop(user: str, password: str) -> None:
+    global _stock_data, _options_chain, _session
+
+    try:
+        _session = _iol_login(user, password)
+        logger.info("IOL session established.")
+    except Exception as e:
+        logger.error(f"IOL login failed: {e}")
+        _session = None
+
     while not _stop_event.is_set():
+        # Stock price via yfinance
         try:
             stock = _fetch_stock()
             with _lock:
                 _stock_data = stock
-            logger.info(f"Stock updated: GGAL.BA @ {stock['last']}")
+            logger.info(f"Stock: GGAL.BA @ {stock['last']}")
         except Exception as e:
             logger.error(f"Stock fetch error: {e}")
 
-        try:
-            chain = _fetch_options()
-            with _lock:
-                _options_chain = chain
-            logger.info(f"Options chain updated: {len(chain)} contracts")
-        except Exception as e:
-            logger.error(f"Options fetch error: {e}")
+        # Options via IOL
+        if _session:
+            try:
+                chain = _fetch_options_iol(_session)
+                with _lock:
+                    _options_chain = chain
+                logger.info(f"Options: {len(chain)} contracts")
+            except Exception as e:
+                logger.error(f"Options fetch error: {e}")
 
         _stop_event.wait(POLL_INTERVAL)
 
 
+# ── Public interface ─────────────────────────────────────────────────────────
+
 def connect() -> None:
     global _poll_thread
+    user     = os.getenv("IOL_USER")
+    password = os.getenv("IOL_PASS")
+    if not user or not password:
+        raise EnvironmentError("IOL_USER and IOL_PASS must be set.")
     _stop_event.clear()
-    _poll_thread = threading.Thread(target=_poll_loop, daemon=True)
+    _poll_thread = threading.Thread(target=_poll_loop, args=(user, password), daemon=True)
     _poll_thread.start()
-    logger.info("BYMA+yfinance polling started.")
+    logger.info("Polling started.")
 
 
 def get_stock_price() -> dict:
