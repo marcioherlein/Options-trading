@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
 
@@ -112,7 +112,7 @@ async def event_generator(request):
 
 
 @app.get("/stream")
-async def stream(request):
+async def stream(request: Request):
     return EventSourceResponse(event_generator(request))
 
 
