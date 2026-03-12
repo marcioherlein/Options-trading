@@ -12,7 +12,7 @@ import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
-TICKER = "GGAL"
+TICKER = "GGAL.BA"
 POLL_INTERVAL = 30  # yfinance rate limits — poll every 30s
 
 _lock = threading.Lock()
@@ -25,13 +25,13 @@ _options_chain: list[dict] = []
 
 def _fetch_stock() -> dict:
     t = yf.Ticker(TICKER)
-    info = t.fast_info
+    fi = t.fast_info
     return {
-        "last": float(getattr(info, "last_price", 0) or 0),
-        "bid": float(getattr(info, "three_month_average_volume", 0) and 0),  # not available in fast_info
-        "ask": 0.0,
-        "volume": int(getattr(info, "three_month_average_volume", 0) or 0),
-        "close": float(getattr(info, "previous_close", 0) or 0),
+        "last": float(getattr(fi, "last_price", 0) or 0),
+        "bid": float(getattr(fi, "bid", 0) or 0),
+        "ask": float(getattr(fi, "ask", 0) or 0),
+        "volume": int(getattr(fi, "last_volume", 0) or 0),
+        "close": float(getattr(fi, "previous_close", 0) or 0),
     }
 
 
