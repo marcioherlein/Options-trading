@@ -1,4 +1,3 @@
-requests
 py_vollib
 fastapi
 uvicorn[standard]
