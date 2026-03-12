@@ -64,16 +64,17 @@ def _on_error(online, error, msg):
 def connect():
     """Initialize and connect pyhomebroker session with IOL credentials."""
     global _hb
+    dni = os.getenv("IOL_DNI")
     user = os.getenv("IOL_USER")
     password = os.getenv("IOL_PASS")
-    if not user or not password:
-        raise EnvironmentError("IOL_USER and IOL_PASS environment variables must be set.")
+    if not dni or not user or not password:
+        raise EnvironmentError("IOL_DNI, IOL_USER and IOL_PASS environment variables must be set.")
 
     with _lock:
         if _hb is not None:
             return
         hb = HomeBroker(BROKER_ID)
-        hb.auth.login(user, password)
+        hb.auth.login(dni=dni, user=user, password=password)
         hb.online.connect()
 
         hb.online.subscribe_quotes(
